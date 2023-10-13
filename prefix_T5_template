@@ -1,0 +1,372 @@
+# # !pip install -q -U bitsandbytes
+# # !pip install -q -U git+https://github.com/huggingface/transformers.git
+# # !pip install -q -U git+https://github.com/huggingface/peft.git
+# # !pip install -q -U git+https://github.com/huggingface/accelerate.git
+# # !pip install -q datasets
+# # !pip install -U adapter-transformers sentencepiece
+# !pip install -U adapter-transformers sentencepiece
+# !pip install datasets
+# !pip install evaluate==0.4.0
+# !pip install rouge_score
+# install Hugging Face Libraries
+#!pip install "peft==0.2.0"
+#!pip install "transformers==4.27.2" "datasets==2.9.0" "accelerate==0.17.1" "evaluate==0.4.0" "bitsandbytes==0.37.1" loralib --upgrade --quiet
+# install additional dependencies needed for training
+#!pip install rouge-score tensorboard py7zr
+
+
+import os
+
+os.environ['HTTP_PROXY'] = 'http://10.205.0.73:8080'
+os.environ['HTTPS_PROXY'] = 'http://10.205.0.73:8080'
+
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from datasets import load_dataset
+from datasets import concatenate_datasets
+from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training, TaskType
+#from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training, TaskType
+from transformers import DataCollatorForSeq2Seq
+from transformers import Seq2SeqTrainer, Seq2SeqTrainingArguments
+import numpy as np
+#from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training, TaskType
+import evaluate
+from tqdm import tqdm
+import json
+import torch
+
+f = open('finetuning-config.json')
+config = json.load(f)
+print(config)
+
+def preprocess_function(sample, document_col, summary_col, tokenizer,max_source_length, max_target_length, padding="max_length"):
+    # add prefix to the input for t5
+    inputs = [item for item in sample[document_col]]
+    abstract = [item for item in sample[summary_col]]
+    tokenizer = tokenizer
+
+    inputs = ["summarize: " + item for item in inputs]
+    #abstract = [pre_processing(item) for item in sample["abstract"]]
+    #print(inputs[0])
+    
+
+    # tokenize inputs
+    model_inputs = tokenizer(inputs, max_length=max_source_length, padding=padding,
+                                 truncation=True)
+
+    # Tokenize targets with the `text_target` keyword argument
+    labels = tokenizer(abstract, max_length=max_target_length, padding=padding,
+                         truncation=True)
+
+    # labels = tokenizer(text_target=sample["abstract"], max_length=max_target_length, padding=padding,
+    #                      truncation=True)
+
+    # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
+    # padding in the loss.
+    if padding == "max_length":
+        labels["input_ids"] = [
+            [(l if l != tokenizer.pad_token_id else -100) for l in label] for label in labels["input_ids"]
+        ]
+
+    model_inputs["labels"] = labels["input_ids"]
+    return model_inputs
+
+    def PEFT_LORA_training(config, dataset, document_col,summary_col,output_dir):
+    if config['finetuning_configs']['model_id'] == 't5-base':
+        model_id="t5-base"
+        # Load tokenizer of t5-base
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        # The maximum total input sequence length after tokenization. 
+        # Sequences longer than this will be truncated, sequences shorter will be padded.
+        tokenized_inputs = concatenate_datasets([dataset["train"], dataset["test"]]).\
+                                map(lambda x: tokenizer(x[document_col], truncation=True), \
+                                batched=True, remove_columns=[i for i in dataset["train"].features if i not in\
+                                                                 ['input_ids', 'attention_mask', 'labels']])
+        input_lenghts = [len(x) for x in tokenized_inputs["input_ids"]]
+        # take 85 percentile of max length for better utilization
+        max_source_length = int(np.percentile(input_lenghts, 85))
+        print(f"Max source length: {max_source_length}")
+        tokenized_targets = concatenate_datasets([dataset["train"], dataset["test"]]).\
+                                    map(lambda x: tokenizer(x[summary_col], truncation=True),\
+                                        batched=True, remove_columns=[i for i in dataset["train"].features if i not in\
+                                                                        ['input_ids', 'attention_mask', 'labels']])
+        target_lenghts = [len(x) for x in tokenized_targets["input_ids"]]
+        # take 90 percentile of max length for better utilization
+        max_target_length = int(np.percentile(target_lenghts, 90))
+        tokenized_dataset = dataset.map(lambda x: preprocess_function(sample = x, document_col = document_col,\
+                                     summary_col =summary_col, tokenizer = tokenizer,max_source_length = max_source_length,
+                                                 max_target_length = max_target_length), 
+                                        batched=True, remove_columns=[i for i in dataset["train"].features if i not in \
+                                        ['input_ids', 'attention_mask', 'labels']])
+        
+        print(f"Max target length: {max_target_length}")
+
+        if config['LORA_finetuning_config']['Load_model_in_8bit'] =='True':
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_id, load_in_8bit=True, device_map="auto")
+            model = prepare_model_for_int8_training(model)
+
+        else:
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        
+        lora_config = LoraConfig(
+                                    r=config['LORA_finetuning_config']['LORA_parameters']['Lora_r'], 
+                                    lora_alpha=config['LORA_finetuning_config']['LORA_parameters']['Lora_alpha'],
+                                    target_modules=["q", "v"],
+                                    lora_dropout=config['LORA_finetuning_config']['LORA_parameters']["Lora_dropout"],
+                                    bias="none",
+                                    task_type=TaskType.SEQ_2_SEQ_LM
+                                )
+        
+        # add LoRA adaptor
+        model = get_peft_model(model, lora_config)
+        model.base_model.model.encoder.enable_input_require_grads()
+        model.base_model.model.decoder.enable_input_require_grads()
+
+        model.print_trainable_parameters()
+
+        # we want to ignore tokenizer pad token in the loss
+        label_pad_token_id = -100
+        # Data collator
+        data_collator = DataCollatorForSeq2Seq(
+            tokenizer,
+            model=model,
+            label_pad_token_id=label_pad_token_id,
+            pad_to_multiple_of=8)
+        
+        
+        output_dir= config['LORA_finetuning_config']["Training_parameters"]["logging_dir"]
+
+        # Define training args
+        training_args = Seq2SeqTrainingArguments(
+            output_dir=output_dir,
+                #auto_find_batch_size=True,
+            per_device_train_batch_size=config['LORA_finetuning_config']["Training_parameters"]["Train_batch_size"],
+            per_device_eval_batch_size=config['LORA_finetuning_config']["Training_parameters"]["eval_bath_size"],
+            learning_rate=config['LORA_finetuning_config']["Training_parameters"]["Learning_rate"], # higher learning rate
+            num_train_epochs=config['LORA_finetuning_config']["Training_parameters"]["Epochs"],
+            #log_level = 'info',
+            logging_dir=f"{output_dir}/logs",
+            logging_strategy=config['LORA_finetuning_config']["Training_parameters"]["logging_strategy"],
+            logging_steps=config['LORA_finetuning_config']["Training_parameters"]["logging_steps"],
+            save_strategy="no",
+            report_to="tensorboard",
+        )
+
+        # Create Trainer instance
+        trainer = Seq2SeqTrainer(
+            model=model,
+            args=training_args,
+            data_collator=data_collator,
+            train_dataset=tokenized_dataset["train"],
+            eval_dataset=tokenized_dataset["test"]
+        )
+        model.config.use_cache = False  # silence the warnings. Please re-enable for inference!
+
+        trainer.train()
+        print(trainer.evaluate())
+        trainer.model.save_pretrained(output_dir)
+        tokenizer.save_pretrained(output_dir)
+        print('Model saved at'+output_dir)
+        return model, tokenizer, max_target_length
+        
+
+
+def PEFT_LORA_training(config, dataset, document_col,summary_col,output_dir):
+    if config['finetuning_configs']['model_id'] == 't5-base':
+        model_id="t5-base"
+        # Load tokenizer of t5-base
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        # The maximum total input sequence length after tokenization. 
+        # Sequences longer than this will be truncated, sequences shorter will be padded.
+        tokenized_inputs = concatenate_datasets([dataset["train"], dataset["test"]]).\
+                                map(lambda x: tokenizer(x[document_col], truncation=True), \
+                                batched=True, remove_columns=[i for i in dataset["train"].features if i not in\
+                                                                 ['input_ids', 'attention_mask', 'labels']])
+        input_lenghts = [len(x) for x in tokenized_inputs["input_ids"]]
+        # take 85 percentile of max length for better utilization
+        max_source_length = int(np.percentile(input_lenghts, 85))
+        print(f"Max source length: {max_source_length}")
+        tokenized_targets = concatenate_datasets([dataset["train"], dataset["test"]]).\
+                                    map(lambda x: tokenizer(x[summary_col], truncation=True),\
+                                        batched=True, remove_columns=[i for i in dataset["train"].features if i not in\
+                                                                        ['input_ids', 'attention_mask', 'labels']])
+        target_lenghts = [len(x) for x in tokenized_targets["input_ids"]]
+        # take 90 percentile of max length for better utilization
+        max_target_length = int(np.percentile(target_lenghts, 90))
+        tokenized_dataset = dataset.map(lambda x: preprocess_function(sample = x, document_col = document_col,\
+                                     summary_col =summary_col, tokenizer = tokenizer,max_source_length = max_source_length,
+                                                 max_target_length = max_target_length), 
+                                        batched=True, remove_columns=[i for i in dataset["train"].features if i not in \
+                                        ['input_ids', 'attention_mask', 'labels']])
+        
+        print(f"Max target length: {max_target_length}")
+
+        if config['LORA_finetuning_config']['Load_model_in_8bit'] =='True':
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_id, load_in_8bit=True, device_map="auto")
+            model = prepare_model_for_int8_training(model)
+
+        else:
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        
+        lora_config = LoraConfig(
+                                    r=config['LORA_finetuning_config']['LORA_parameters']['Lora_r'], 
+                                    lora_alpha=config['LORA_finetuning_config']['LORA_parameters']['Lora_alpha'],
+                                    target_modules=["q", "v"],
+                                    lora_dropout=config['LORA_finetuning_config']['LORA_parameters']["Lora_dropout"],
+                                    bias="none",
+                                    task_type=TaskType.SEQ_2_SEQ_LM
+                                )
+        
+        # add LoRA adaptor
+        model = get_peft_model(model, lora_config)
+        model.base_model.model.encoder.enable_input_require_grads()
+        model.base_model.model.decoder.enable_input_require_grads()
+
+        model.print_trainable_parameters()
+
+        # we want to ignore tokenizer pad token in the loss
+        label_pad_token_id = -100
+        # Data collator
+        data_collator = DataCollatorForSeq2Seq(
+            tokenizer,
+            model=model,
+            label_pad_token_id=label_pad_token_id,
+            pad_to_multiple_of=8)
+        
+        
+        output_dir= config['LORA_finetuning_config']["Training_parameters"]["logging_dir"]
+
+        # Define training args
+        training_args = Seq2SeqTrainingArguments(
+            output_dir=output_dir,
+                #auto_find_batch_size=True,
+            per_device_train_batch_size=config['LORA_finetuning_config']["Training_parameters"]["Train_batch_size"],
+            per_device_eval_batch_size=config['LORA_finetuning_config']["Training_parameters"]["eval_bath_size"],
+            learning_rate=config['LORA_finetuning_config']["Training_parameters"]["Learning_rate"], # higher learning rate
+            num_train_epochs=config['LORA_finetuning_config']["Training_parameters"]["Epochs"],
+            #log_level = 'info',
+            logging_dir=f"{output_dir}/logs",
+            logging_strategy=config['LORA_finetuning_config']["Training_parameters"]["logging_strategy"],
+            logging_steps=config['LORA_finetuning_config']["Training_parameters"]["logging_steps"],
+            save_strategy="no",
+            report_to="tensorboard",
+        )
+
+        # Create Trainer instance
+        trainer = Seq2SeqTrainer(
+            model=model,
+            args=training_args,
+            data_collator=data_collator,
+            train_dataset=tokenized_dataset["train"],
+            eval_dataset=tokenized_dataset["test"]
+        )
+        model.config.use_cache = False  # silence the warnings. Please re-enable for inference!
+
+        trainer.train()
+        print(trainer.evaluate())
+        trainer.model.save_pretrained(output_dir)
+        tokenizer.save_pretrained(output_dir)
+        print('Model saved at'+output_dir)
+        return model, tokenizer, max_target_length
+        
+
+def PEFT_LORA_inferencing(model,tokenizer, dataset, document_col,summary_col,output_dir,max_target_length):
+        predictions, references = [] , []
+        validation_dataset = dataset['validation']
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        for i in range(validation_dataset.num_rows):
+            # load the input and label
+            input_ids = tokenizer(validation_dataset[document_col][i], return_tensors="pt", truncation=True).input_ids.to(device)
+            # use the model to generate the output
+            output = model.generate(input_ids=input_ids, max_length = max_target_length)
+            # convert the tokens to text
+            #input_text = tokenizer.decode(input_ids[0], skip_special_tokens=True)
+            output_text = tokenizer.decode(output[0], skip_special_tokens=True)
+            predictions.append(output_text)
+            references.append(validation_dataset[summary_col][i])
+        # Metric
+        metric = evaluate.load("rouge")
+        rogue = metric.compute(predictions=predictions, references=references, use_stemmer=True)
+        print(f"Rogue1: {rogue['rouge1']* 100:2f}%")
+        print(f"rouge2: {rogue['rouge2']* 100:2f}%")
+        print(f"rougeL: {rogue['rougeL']* 100:2f}%")
+        print(f"rougeLsum: {rogue['rougeLsum']* 100:2f}%")
+        return rogue
+def run_LORA_Finetuning(config):
+    document_col = config['LORA_finetuning_config']["document_col"]
+    summary_col = config['LORA_finetuning_config']["summary_col"]
+    output_dir= config['LORA_finetuning_config']["Training_parameters"]["logging_dir"]
+    dataset = load_dataset('csv', data_files={'train': config['LORA_finetuning_config']['train_dataset_path'],
+                                                  'test': config['LORA_finetuning_config']['test_dataset_path'],
+                                                  'validation': config['LORA_finetuning_config']['validation_dataset_path']
+                                                  }
+                               )
+
+    model, tokenizer, max_target_length = PEFT_LORA_training(config, dataset, document_col,summary_col,output_dir)
+    rouge_score = PEFT_LORA_inferencing(model,tokenizer, dataset, document_col,summary_col,output_dir, max_target_length)
+    return rouge_score
+
+    result = run_LORA_Finetuning(config)
+
+    ****** conifg file ********
+
+{
+    "finetuning_configs":{"model_id":"t5-base",
+        "LORA_finetuning": "False", "QLORA_finetuning": "False",
+     "PREFIX_Finetuning": "True"
+},
+    "LORA_finetuning_config": {
+        "train_dataset_path": "Dataset/df_train.csv",
+        "test_dataset_path": "Dataset/df_test.csv",
+        "validation_dataset_path": "Dataset/df_val.csv",
+        "document_col":"document",
+        "summary_col": "summary",
+        "Load_model_in_8bit":"False",
+        "LORA_parameters": {"Lora_alpha":64,
+                             "Lora_r":32,
+                            "Lora_dropout":0.05},
+        "Training_parameters": {"Epochs":5,
+                                "logging_steps":200,
+                            "Learning_rate":1e-3,
+                        "Train_batch_size":8,
+                    "eval_bath_size":8,
+                "logging_strategy":"steps",
+            "logging_dir":"lora-test"}
+        
+    },
+     "QLORA_finetuning_config": {
+        "train_dataset_path": "Dataset/df_train.csv",
+        "test_dataset_path": "Dataset/df_test.csv",
+        "validation_dataset_path": "Dataset/df_val.csv",
+        "document_col":"document",
+        "summary_col": "summary",
+        "LORA_parameters": {"Lora_alpha":64,
+                             "Lora_r":32,
+                            "Lora_dropout":0.05},
+        "Training_parameters": {"Epochs":5,
+                                "logging_steps":200,
+                            "Learning_rate":1e-3,
+                        "Train_batch_size":8,
+                    "eval_bath_size":8,
+                "logging_strategy":"steps",
+            "logging_dir":"lora-test"}
+        
+    },
+    "PREFIX_finetuning_config": {
+        "train_dataset_path": "Dataset/df_train.csv",
+        "test_dataset_path": "Dataset/df_test.csv",
+        "validation_dataset_path": "Dataset/df_val.csv",
+        "document_col":"document",
+        "summary_col": "summary",
+        "PREFIX_parameters": {"num_layers":12,
+                             "num_virtual_tokens":20},
+        "Training_parameters": {"Epochs":5,
+                                "logging_steps":200,
+                            "Learning_rate":1e-3,
+                        "logging_strategy":"steps",
+            "logging_dir":"lora-test"}
+        
+    }
+}
+
+    
+
