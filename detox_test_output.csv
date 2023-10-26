@@ -1,0 +1,26 @@
+sentences,sentences_dbias_toxicity_label,sentences_cls_toxicity,sentences_evl_toxicity
+"I'm having issues with my internet connection, Your customer service is the worst I've ever encountered",Biased,SUBJECTIVE,Not Toxic
+Your service is terrible! And Your prices are way too high,Biased,SUBJECTIVE,Not Toxic
+by playing this game you agree to these terms. if you re under 13 and playing your parent guardian agrees on your behalf.,Non-biased,NEUTRAL,Not Toxic
+you have to use google pokemon trainer club or facebook to sign up and play. if you re under 13 your parent guardian has to do this for you. we might ban your account if your information is inaccurate,Non-biased,NEUTRAL,Less Toxic
+don t die or hurt others and if you do it s not our fault.,Biased,SUBJECTIVE,Not Toxic
+"The telecom company unveiled its new 5G network, promising lightning-fast speeds.",Non-biased,SUBJECTIVE,Not Toxic
+Subscribers praised the telecom provider's reliable signal even in remote areas.,Non-biased,NEUTRAL,Not Toxic
+Telecom engineers worked tirelessly to expand coverage to rural communities.,Biased,SUBJECTIVE,Not Toxic
+The latest smartphone release from the telecom giant received rave reviews for its innovative features.,Non-biased,SUBJECTIVE,Not Toxic
+"A telecommunications merger was announced, potentially reshaping the industry landscape.",Non-biased,NEUTRAL,Not Toxic
+Customers eagerly awaited the telecom company's annual data plan discounts.,Non-biased,SUBJECTIVE,Not Toxic
+Telecom providers are investing heavily in fiber optic infrastructure for faster internet connections.,Non-biased,NEUTRAL,Not Toxic
+A cybersecurity breach at a major telecom firm raised concerns about data privacy.,Non-biased,NEUTRAL,Not Toxic
+The telecom industry faces increased competition as new players enter the market.,Biased,NEUTRAL,Not Toxic
+The telecom sector continues to evolve with the adoption of IoT technology.,Non-biased,NEUTRAL,Not Toxic
+Customer: I think your company's data plans are too expensive. Agent: We appreciate your feedback and are always looking for ways to improve our pricing.,Biased,NEUTRAL,Not Toxic
+Customer: Your customer service agents are always so helpful! Agent: Thank you for the compliment! We're here to assist you in any way we can.,Biased,SUBJECTIVE,Not Toxic
+Customer: Your network coverage is terrible; I can't get a signal anywhere! Agent: I'm sorry to hear about the coverage issue. Let's work on resolving that for you.,Non-biased,SUBJECTIVE,Not Toxic
+Customer: Your competitor's offers are way better than yours. Agent: We'll review our plans to ensure they remain competitive. Thank you for letting us know.,Non-biased,SUBJECTIVE,Not Toxic
+Customer: Your billing system is so confusing; I can never understand my bill! Agent: I apologize for any confusion. Let's go over your bill together and clarify things.,Biased,SUBJECTIVE,Not Toxic
+Customer: Your technical support is useless; they couldn't solve my problem. Agent: I'm sorry to hear that. Let's see if we can find a solution to your technical issue now.,Biased,SUBJECTIVE,Not Toxic
+Customer: Your service is outstanding; I've been a loyal customer for years. Agent: We're delighted to have you as a loyal customer. Is there anything we can assist you with today?,Non-biased,SUBJECTIVE,Not Toxic
+Customer: Your recent network upgrade improved my call quality significantly. Agent: That's great to hear! We're committed to enhancing our network for better call quality.,Biased,SUBJECTIVE,Not Toxic
+Customer: Your company's environmental initiatives are impressive. Agent: Thank you for recognizing our commitment to sustainability. We'll continue our efforts.,Non-biased,SUBJECTIVE,Not Toxic
+Customer: Your data plans are the best; I always recommend your company to friends. Agent: We appreciate your referrals and loyalty. Is there anything else we can help you with today?,Biased,NEUTRAL,Not Toxic
